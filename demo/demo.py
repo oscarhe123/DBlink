@@ -5,11 +5,14 @@ import torch
 from DataHandlers import *
 from NN_model import *
 from Trainers import *
+#from trainersorig import *
 from Utils import *
 from demo_exp_params import *
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import numpy as np
+
+# from torchview import draw_graph
 
 # Device
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -22,9 +25,9 @@ if not tmp_result_dir_exist:
 
 ####### Step I - Parameter Initialization #######
 # Run flags
-GenerateTrainData = True
-GenerateTestData = True
-TrainNetFlag = False
+GenerateTrainData = False
+GenerateTestData = False
+TrainNetFlag = True
 TestOnRealData = False
 
 path = r'./' # Path to model
@@ -34,16 +37,23 @@ sum_factor = 10 # The temporal window size DBlink uses to sum localizations
 pixel_size = 160 # Camera pixel size - relevant for experimental data
 simulated_video_length = 3000 # Length of simulated video - relevant for simulated data generation
 density = 0.002 # Blinking density (percentage out of the number of non-zero pixels in the simulated structure)
-img_size = 32 # Simulated image size - relevant for simulated data generation
+img_size = 32 # Simulated image size - relevant for simulated data generation  #not relevant for the model itself
 
 ####### Step II - Training data generation #######
-trainset_size = 1024
-valset_size = 256
+# trainset_size = 1024
+# valset_size = 256
+
+# trainset_size = 32
+# valset_size = 8
+trainset_size = 1
+valset_size = 1
+
+
 if(TrainNetFlag):
     if(GenerateTrainData):
         [X_train, y_train] = Simulate_Train_Data_060622(obs_size=img_size, dataset_size=trainset_size,
                                                         video_length=simulated_video_length, emitters_density=density,
-                                                         scale=scale, sum_range=sum_factor, datatype='tubules')
+                                                          scale=scale, sum_range=sum_factor, datatype='tubules')
         [X_val, y_val] = Simulate_Train_Data_060622(obs_size=img_size, dataset_size=valset_size,
                                                     video_length=simulated_video_length, emitters_density=density,
                                                     scale=scale, sum_range=sum_factor, datatype='tubules')
@@ -52,8 +62,8 @@ if(TrainNetFlag):
         X_val = torch.FloatTensor(X_val)
         y_val = torch.FloatTensor(y_val)
 
-        torch.save(X_train, 'X_train')
-        torch.save(y_train, 'y_train')
+        torch.save(X_train, 'X_train') # localizations are 1 and 0 for background
+        torch.save(y_train, 'y_train') # 255 or GT, 0 for BG
         torch.save(X_val, 'X_val')
         torch.save(y_val, 'y_val')
     else:
@@ -64,15 +74,19 @@ if(TrainNetFlag):
 
 ####### Step III - Build Model, loss and optimizer #######
 num_layers = 2 # The number of LSTM layers
-hidden_channels = 4 # The hidden layer number of channels
+hidden_channels = 4 # The hidden layer number of channels at the output of each lstm cell. Purpose?: adding more combinations of features? -> Higher complexity. It's more features.
 lr = 1e-4 # Training learning rate
 window_size = 25 # The number of used windows (in each direction) for the inference of each reconstructed frame
 betas = (0.99, 0.999) # Parameters of Adam optimizer
-batch_size = 1
-epochs = 150
+batch_size = 4
+epochs = 4
 patience = 3
 
 model = ConvOverlapBLSTM(input_size=(img_size, img_size), input_channels=1, hidden_channels=hidden_channels, num_layers=num_layers, device=device).to(device)
+
+# model_graph = draw_graph(model,input_size=((1,4,1,128,128),(1,4,1,128,128)))
+# model_graph.visual_graph
+
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=lr, betas=betas)
 scheduler = ReduceLROnPlateau(optimizer, 'min', patience=patience, min_lr=1e-9, verbose=True)
@@ -82,7 +96,7 @@ if(TrainNetFlag):
     dl_train = CreateDataLoader(X_train, y_train, batch_size=batch_size)
     dl_val = CreateDataLoader(X_val, y_val, batch_size=batch_size)
 
-    trainer = LSTM_overlap_Trainer(model, criterion, optimizer, scheduler, batch_size, window_size=window_size,
+    trainer = LSTM_ULM_trainer(model, criterion, optimizer, scheduler, batch_size, window_size=window_size,
                                    vid_length=X_train.shape[1], patience=patience, device=device)
     trainer.fit(dl_train, dl_val, num_epochs=epochs)
     torch.save(model.state_dict(), model_name)
@@ -152,3 +166,10 @@ else:
 
         # Post process reconstruction and generate output video
         post_process_results(r'./tmp_results', i + 1)
+        
+        
+        #
+        # for i in range(4):
+        #     post_process_results(r'./tmp_results', i + 1)
+            
+
